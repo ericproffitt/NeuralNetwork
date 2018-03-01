@@ -1,11 +1,12 @@
-sigmoid(z::Float64) = 1/(1 + exp(-z))
+sigmoid(z::Float64) = 1 / (1 + exp(-z))
 sigmoidPrime(z::Float64) = sigmoid(z) * (1 - sigmoid(z))
+
 
 ### Types ###
 
-abstract AbstractNode
+abstract type AbstractNode end
 
-type Edge
+mutable struct Edge
     source::AbstractNode
     target::AbstractNode
     weight::Float64
@@ -15,7 +16,7 @@ type Edge
     Edge(source::AbstractNode, target::AbstractNode) = new(source, target, randn(1,1)[1], 0.0, false)
 end
 
-type Node <: AbstractNode
+mutable struct Node <: AbstractNode
     incomingEdges::Vector{Edge}
     outgoingEdges::Vector{Edge}
     activation::Float64
@@ -24,7 +25,7 @@ type Node <: AbstractNode
     Node() = new([], [], -1.0, -1.0)
 end
 
-type InputNode <: AbstractNode
+mutable struct InputNode <: AbstractNode
     index::Int
     incomingEdges::Vector{Edge}
     outgoingEdges::Vector{Edge}
@@ -33,7 +34,7 @@ type InputNode <: AbstractNode
     InputNode(index::Int) = new(index, [], [], -1.0)
 end
 
-type BiasNode <: AbstractNode
+mutable struct BiasNode <: AbstractNode
     incomingEdges::Vector{Edge}
     outgoingEdges::Vector{Edge}
     activation::Float64
@@ -41,15 +42,15 @@ type BiasNode <: AbstractNode
     BiasNode() = new([], [], 1.0)
 end
 
-type Network
+struct Network
     inputNodes::Vector{InputNode}
     hiddenNodes::Vector{Node}
     outputNodes::Vector{Node}
 
-    function Network(sizes::Array, bias::Bool=true)
-        inputNodes = [InputNode(i) for i in 1:sizes[1]];
-        hiddenNodes = [Node() for _ in 1:sizes[2]];
-        outputNodes = [Node() for _ in 1:sizes[3]];
+    function Network{T<:Integer}(sizes::Vector{T}, bias::Bool=true)
+        inputNodes = [InputNode(i) for i in 1:sizes[1]]
+        hiddenNodes = [Node() for _ in 1:sizes[2]]
+        outputNodes = [Node() for _ in 1:sizes[3]]
 
         for inputNode in inputNodes
             for node in hiddenNodes
@@ -83,30 +84,30 @@ end
 
 ### Methods ###
 
-function evaluate(obj::Node, inputVector::Array)
-    if obj.activation > -0.5
-        return obj.activation
+function evaluate(node::Node, inputVector::Vector{Float64})
+    if node.activation > -0.5
+        return node.activation
     else
-        weightedSum = sum([d.weight * evaluate(d.source, inputVector) for d in obj.incomingEdges])
-        obj.activation = sigmoid(weightedSum)
-        obj.activationPrime = sigmoidPrime(weightedSum)
+        weightedSum = sum([d.weight * evaluate(d.source, inputVector) for d in node.incomingEdges])
+        node.activation = sigmoid(weightedSum)
+        node.activationPrime = sigmoidPrime(weightedSum)
 
-        return obj.activation
+        return node.activation
     end
 end
 
-function evaluate(obj::InputNode, inputVector::Array)
-    obj.activation = inputVector[obj.index]
-    return obj.activation
+function evaluate(node::InputNode, inputVector::Vector{Float64})
+    node.activation = inputVector[node.index]
+    return node.activation
 end
 
-function evaluate(obj::BiasNode, inputVector::Array)
-    obj.activation = 1.0
-    return obj.activation
+function evaluate(node::BiasNode, inputVector::Vector{Float64})
+    node.activation = 1.0
+    return node.activation
 end
 
-function updateWeights(obj::AbstractNode, learningRate::Float64)
-    for d in obj.incomingEdges
+function updateWeights(node::AbstractNode, learningRate::Real)
+    for d in node.incomingEdges
         if d.augmented == false
             d.augmented = true
             d.weight -= learningRate * d.derivative
@@ -116,70 +117,81 @@ function updateWeights(obj::AbstractNode, learningRate::Float64)
     end
 end
 
-function compute(obj::Network, inputVector::Array)
-    output = [evaluate(node, inputVector) for node in obj.outputNodes]
-    for node in obj.outputNodes
+function compute{T<:Real}(network::Network, inputVector::Vector{T})
+    inputVector = float(inputVector)
+    
+    output = [evaluate(node, inputVector) for node in network.outputNodes]
+    for node in network.outputNodes
         clear(node)
     end
     return output
 end
 
-function clear(obj::AbstractNode)
-    for d in obj.incomingEdges
-        obj.activation = -1.0
-        obj.activationPrime = -1.0
+function clear(node::AbstractNode)
+    for d in node.incomingEdges
+        node.activation = -1.0
+        node.activationPrime = -1.0
         d.augmented = false
         clear(d.source)
     end
 end
 
-function propagateDerivatives(obj::AbstractNode, error::Float64)
-    for d in obj.incomingEdges
+function propagateDerivatives(node::AbstractNode, err::Real)
+    for d in node.incomingEdges
         if d.augmented == false
             d.augmented = true
-            d.derivative += error * obj.activationPrime * d.source.activation
-            propagateDerivatives(d.source, error * d.weight * obj.activationPrime)
+            d.derivative += err * node.activationPrime * d.source.activation
+            propagateDerivatives(d.source, err * d.weight * node.activationPrime)
         end
     end
 end
 
-function backpropagation(obj::Network, example::Array)
-    output = [evaluate(node, example[1]) for node in obj.outputNodes]
-    error = output - example[2]
-    for (node, err) in zip(obj.outputNodes, error)
+function backpropagation(network::Network, example::Vector{Vector{Float64}})
+    output = [evaluate(node, example[1]) for node in network.outputNodes]
+    errors = output - example[2]
+    for (node, err) in zip(network.outputNodes, errors)
         propagateDerivatives(node, err)
     end
 
-    for node in obj.outputNodes
+    for node in network.outputNodes
         clear(node)
     end
 end
 
-function train(obj::Network, labeledExamples::Array, learningRate::Float64=0.7, iterations::Int=10000)
+function train{T<:Real}(network::Network, labeledExamples::Vector{Vector{Vector{T}}}, learningRate::Real=0.7, iterations::Integer=10000)
+    labeledExamples = [[float(ex[1]), float(ex[2])] for ex in labeledExamples]
+
     for _ in 1:iterations
         for ex in labeledExamples
-            backpropagation(obj, ex)
+            backpropagation(network, ex)
         end
 
-        for node in obj.outputNodes
+        for node in network.outputNodes
             updateWeights(node, learningRate)
         end
 
-        for node in obj.outputNodes
+        for node in network.outputNodes
             clear(node)
         end
     end
+    nothing
 end
 
 
-labeledExamples = Array[Array[[0,0,0], [0]],
-                        Array[[0,0,1], [1]],
-                        Array[[0,1,0], [0]],
-                        Array[[0,1,1], [1]],
-                        Array[[1,0,0], [0]],
-                        Array[[1,0,1], [1]],
-                        Array[[1,1,0], [1]],
-                        Array[[1,1,1], [0]]];
+### Test ###
 
-neuralnetwork = Network([3,4,1])
-@time train(neuralnetwork, labeledExamples)
+function test()
+    labeledExamples =  [[[0,0,0], [0]],
+                        [[0,0,1], [1]],
+                        [[0,1,0], [0]],
+                        [[0,1,1], [1]],
+                        [[1,0,0], [0]],
+                        [[1,0,1], [1]],
+                        [[1,1,0], [1]],
+                        [[1,1,1], [0]]]
+
+    neuralnetwork = Network([3,4,1])
+    train(neuralnetwork, labeledExamples)
+    println("training accuracy = ", sum([round.(compute(neuralnetwork, ex[1])) == ex[2] for ex in labeledExamples]) / length(labeledExamples))
+    nothing
+end
